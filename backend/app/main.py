@@ -87,35 +87,34 @@ def product_comparison(products: list[dict]):
     if len(products) < 2:
         raise HTTPException(
             status_code=400,
-            detail="At least two Amazon product URLs are required",
+            detail="At least two products are required",
         )
 
     scraped_products = []
 
     for item in products:
-        url = item.get("url")
 
-        if not url:
-            raise HTTPException(
-                status_code=400,
-                detail="Each product must contain a URL",
-            )
+        # If an Amazon URL is provided, scrape it.
+        if item.get("url"):
+            try:
+                product = scrape_amazon_product(item["url"])
+                scraped_products.append(product)
 
-        try:
-            product = scrape_amazon_product(url)
-            scraped_products.append(product)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(exc),
+                ) from exc
 
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=str(exc),
-            ) from exc
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=str(exc),
+                ) from exc
 
-        except RuntimeError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=str(exc),
-            ) from exc
+        # Otherwise use already-scraped product data.
+        else:
+            scraped_products.append(item)
 
     try:
         return compare_products(scraped_products)
