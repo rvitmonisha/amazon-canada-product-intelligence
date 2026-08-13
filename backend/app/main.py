@@ -1,13 +1,35 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.ai_insights import generate_product_insights
+from backend.app.amazon_scraper import scrape_amazon_product
+from backend.app.price_history import save_price
+from backend.app.product_api import router as product_router
 from backend.app.product_comparison import compare_products
+
 
 app = FastAPI(
     title="Amazon Canada Product Intelligence API",
     description="Product intelligence and price tracking API for Amazon Canada.",
     version="1.0.0",
 )
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+app.include_router(product_router)
 
 
 @app.get("/")
@@ -20,7 +42,39 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "healthy"}
+    return {
+        "status": "healthy",
+    }
+
+
+@app.post("/products/scrape")
+def scrape_product(product: dict):
+    url = product.get("url")
+
+    if not url:
+        raise HTTPException(
+            status_code=400,
+            detail="Amazon product URL is required",
+        )
+
+    try:
+        scraped_product = scrape_amazon_product(url)
+
+        save_price(scraped_product)
+
+        return scraped_product
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        ) from exc
 
 
 @app.post("/products/insights")
@@ -30,10 +84,43 @@ def product_insights(product: dict):
 
 @app.post("/products/compare")
 def product_comparison(products: list[dict]):
-    if not products:
+    if len(products) < 2:
         raise HTTPException(
             status_code=400,
-            detail="At least one product is required",
+            detail="At least two products are required",
         )
 
-    return compare_products(products)
+    scraped_products = []
+
+    for item in products:
+
+        # If an Amazon URL is provided, scrape it.
+        if item.get("url"):
+            try:
+                product = scrape_amazon_product(item["url"])
+                scraped_products.append(product)
+
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(exc),
+                ) from exc
+
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=str(exc),
+                ) from exc
+
+        # Otherwise use already-scraped product data.
+        else:
+            scraped_products.append(item)
+
+    try:
+        return compare_products(scraped_products)
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to compare products: {str(exc)}",
+        ) from exc
